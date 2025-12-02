@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>맞춤형 사업 추천 테스트</title>
+    <style>
+        body { font-family: Arial, sans-serif; padding: 20px; background-color: #f4f4f9; }
+        .question-container { margin-bottom: 25px; padding: 15px; background-color: white; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
+        h2 { color: #333; border-bottom: 2px solid #eee; padding-bottom: 10px; }
+        .option-button { 
+            display: block; 
+            width: 100%; 
+            padding: 10px; 
+            margin-bottom: 8px; 
+            border: 1px solid #ccc; 
+            border-radius: 5px; 
+            text-align: left; 
+            cursor: pointer;
+            background-color: #f9f9f9;
+        }
+        .option-button:hover { background-color: #e9e9e9; }
+        .selected { background-color: #28a745 !important; color: white; border-color: #28a745; }
+        #submit-button { 
+            width: 100%; 
+            padding: 15px; 
+            background-color: #007bff; 
+            color: white; 
+            border: none; 
+            border-radius: 8px; 
+            font-size: 18px; 
+            cursor: pointer;
+            margin-top: 20px;
+        }
+        #results { margin-top: 30px; }
+        .business-item { padding: 10px; border-bottom: 1px dashed #ddd; }
+        .rank { font-weight: bold; color: #dc3545; font-size: 1.1em; }
+        .status-ok { color: green; }
+        .status-end { color: gray; }
+    </style>
+</head>
+<body>
+
+    <h1>상생누리 맞춤형 사업 추천 테스트</h1>
+    <div id="qna-section">
+        {% for q in questions %}
+            <div class="question-container" data-prefix="{{ q.prefix }}">
+                <h2>{{ q.title }}</h2>
+                {% for option in q.options %}
+                    <button class="option-button" data-code="{{ option.code }}" data-prefix="{{ q.prefix }}">
+                        {{ option.text }}
+                    </button>
+                {% endfor %}
+            </div>
+        {% endfor %}
+
+        <button id="submit-button">결과 보기</button>
+    </div>
+
+    <div id="results" style="display: none;">
+        <h2>✨ 추천 결과</h2>
+        <div id="recommendation-list"></div>
+    </div>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            const buttons = document.querySelectorAll('.option-button');
+            const submitButton = document.getElementById('submit-button');
+            const qnaSection = document.getElementById('qna-section');
+            const resultsDiv = document.getElementById('results');
+            const recommendationList = document.getElementById('recommendation-list');
+            
+            const selectedCodes = new Map();
+            const totalQuestions = {{ questions|length }}; 
+
+            buttons.forEach(button => {
+                button.addEventListener('click', () => {
+                    const prefix = button.dataset.prefix;
+                    const code = button.dataset.code;
+
+                    document.querySelectorAll(`.option-button[data-prefix="${prefix}"]`).forEach(btn => {
+                        btn.classList.remove('selected');
+                    });
+                    
+                    button.classList.add('selected');
+                    selectedCodes.set(prefix, code);
+
+                    const allQuestionsAnswered = selectedCodes.size === totalQuestions;
+                    submitButton.disabled = !allQuestionsAnswered;
+                    submitButton.textContent = allQuestionsAnswered ? '결과 보기 (클릭)' : `모든 ${totalQuestions}개 질문에 답해주세요. (${selectedCodes.size}/${totalQuestions})`;
+                });
+            });
+
+            submitButton.disabled = true;
+            submitButton.textContent = `모든 ${totalQuestions}개 질문에 답해주세요.`;
+
+            submitButton.addEventListener('click', async () => {
+                const qnaCodes = Array.from(selectedCodes.values());
+
+                if (qnaCodes.length < totalQuestions) return;
+
+                submitButton.disabled = true;
+                submitButton.textContent = '결과 분석 중... ⏳';
+
+                try {
+                    const response = await fetch('/api/recommend', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ qna_codes: qnaCodes })
+                    });
+
+                    const result = await response.json();
+
+                    if (response.ok) {
+                        displayResults(result); 
+                        qnaSection.style.display = 'none';
+                        resultsDiv.style.display = 'block';
+                    } else {
+                        alert('오류 발생: ' + result.error);
+                    }
+
+                } catch (error) {
+                    alert('서버와 통신 중 오류가 발생했습니다.');
+                    console.error('Fetch Error:', error);
+                } finally {
+                    submitButton.disabled = false;
+                    submitButton.textContent = '결과 보기';
+                }
+            });
+
+            function displayResults(data) {
+                recommendationList.innerHTML = ''; 
+                const recommendations = data.recommendations;
+                let currentPage = 0;
+                const itemsPerPage = 10;
+                
+                function renderPage(page) {
+                    recommendationList.innerHTML = '';
+                    const start = page * itemsPerPage;
+                    const end = start + itemsPerPage;
+                    const pageItems = recommendations.slice(start, end);
+
+                    const pageHeader = document.createElement('h3');
+                    pageHeader.textContent = `추천 목록 (TOP ${start + 1} ~ ${Math.min(end, data.total_count)}, ${page + 1} 페이지)`;
+                    recommendationList.appendChild(pageHeader);
+
+                    pageItems.forEach(item => {
+                        const div = document.createElement('div');
+                        div.className = 'business-item';
+                        
+                        const statusClass = item.status.includes('진행 중') ? 'status-ok' : 'status-end';
+
+                        let html = `<p class="rank">[${item.rank}위] <span class="${statusClass}">${item.status}</span> | 일치 점수: ${item.score} | ${item.name}</p>`;
+                        html += `<p style="margin-left: 10px;">- 일치 키워드: `;
+                        if(item.score > 0) {
+                            html += `<b>${item.matched_keywords.join(', ')}</b> (${item.score}개 일치)`;
+                        } else {
+                            html += `(일치 키워드 없음)`;
+                        }
+                        html += `</p>`;
+                        html += `<p style="margin-left: 10px;">- 기한: ${item.deadline} | <a href="${item.link}" target="_blank">사업 바로가기</a></p>`;
+                        
+                        div.innerHTML = html;
+                        recommendationList.appendChild(div);
+                    });
+
+                    const nav = document.createElement('div');
+                    nav.style.textAlign = 'center';
+                    nav.style.marginTop = '20px';
+                    
+                    if (page > 0) {
+                        const prevBtn = document.createElement('button');
+                        prevBtn.textContent = '◀️ 이전 10개';
+                        prevBtn.onclick = () => { currentPage--; renderPage(currentPage); };
+                        nav.appendChild(prevBtn);
+                    }
+
+                    if (end < data.total_count) {
+                        const nextBtn = document.createElement('button');
+                        nextBtn.textContent = '다음 10개 ▶️';
+                        nextBtn.style.marginLeft = '10px';
+                        nextBtn.onclick = () => { currentPage++; renderPage(currentPage); };
+                        nav.appendChild(nextBtn);
+                    }
+                    recommendationList.appendChild(nav);
+                }
+                
+                renderPage(currentPage);
+            }
+        });
+    </script>
+</body>
+</html>
